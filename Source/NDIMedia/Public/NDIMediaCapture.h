@@ -17,7 +17,7 @@
 #include "NDIMediaCapture.generated.h"
 
 class UNDIMediaOutput;
-struct NDIFrameBuffer;
+struct FNdiFrameBuffer;
 
 UCLASS(BlueprintType)
 class NDIMEDIA_API UNDIMediaCapture
@@ -53,12 +53,12 @@ private:
 	ENDIMediaOutputPixelFormat OutputPixelFormat;
 	FFrameRate OutputFrameRate;
 
-	std::deque<NDIFrameBuffer*> FrameBuffers;
+	std::deque<FNdiFrameBuffer*> FrameBuffers;
 	uint8_t CurrentFrameBufferIndex = 0;
 
 	std::thread NDISendThread;
 	std::atomic_bool NDISendThreadRunning = false;
 
-	bool InitNDI(UNDIMediaOutput* Output);
-	bool DisposeNDI();
+	bool InitNdi(UNDIMediaOutput* Output);
+	bool DisposeNdi();
 };

@@ -7,14 +7,14 @@
 #include <chrono>
 #include <vector>
 
-struct NDIFrameBuffer
+struct FNdiFrameBuffer
 {
-	NDIlib_video_frame_v2_t frame;
-	std::vector<uint8_t> buffer;
+	NDIlib_video_frame_v2_t Frame;
+	std::vector<uint8_t> Buffer;
 };
 
 UNDIMediaCapture::UNDIMediaCapture(const FObjectInitializer& ObjectInitializer)
-	: Super()
+	: Super(ObjectInitializer)
 {
 }
 
@@ -33,9 +33,12 @@ bool UNDIMediaCapture::ValidateMediaOutput() const
 #if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 1
 bool UNDIMediaCapture::InitializeCapture()
 {
+	//if (!Super::InitializeCapture())
+	//	return false;
+
 	UNDIMediaOutput* Output = CastChecked<UNDIMediaOutput>(MediaOutput);
 	OutputPixelFormat = Output->OutputPixelFormat;
-	return InitNDI(Output);
+	return InitNdi(Output);
 }
 
 #else
@@ -68,47 +71,47 @@ bool UNDIMediaCapture::UpdateRenderTargetImpl(UTextureRenderTarget2D* InRenderTa
 void UNDIMediaCapture::StopCaptureImpl(bool bAllowPendingFrameToBeProcess)
 {
 	Super::StopCaptureImpl(bAllowPendingFrameToBeProcess);
-	DisposeNDI();
+	DisposeNdi();
 }
 
 void UNDIMediaCapture::OnFrameCaptured_RenderingThread(const FCaptureBaseData& InBaseData,
 	TSharedPtr<FMediaCaptureUserData, ESPMode::ThreadSafe> InUserData, void* InBuffer, int32 Width, int32 Height,
 	int32 BytesPerRow)
 {
-	NDIFrameBuffer* FrameBuffer = new NDIFrameBuffer();
+	FNdiFrameBuffer* FrameBuffer = new FNdiFrameBuffer();
 
-	FrameBuffer->frame.frame_rate_N = OutputFrameRate.Numerator;
-	FrameBuffer->frame.frame_rate_D = OutputFrameRate.Denominator;
+	FrameBuffer->Frame.frame_rate_N = OutputFrameRate.Numerator;
+	FrameBuffer->Frame.frame_rate_D = OutputFrameRate.Denominator;
 	
 	if (OutputPixelFormat == ENDIMediaOutputPixelFormat::NDI_PF_P210)
 	{
-		NDIlib_video_frame_v2_t video_frame_V210;
-		video_frame_V210.line_stride_in_bytes = Width * 16;
-		video_frame_V210.xres = Width * 6;
-		video_frame_V210.yres = Height;
-		video_frame_V210.FourCC = NDIlib_FourCC_type_P216;
-		video_frame_V210.p_data = (uint8_t*)InBuffer;
+		NDIlib_video_frame_v2_t VideoFrameV210;
+		VideoFrameV210.line_stride_in_bytes = Width * 16;
+		VideoFrameV210.xres = Width * 6;
+		VideoFrameV210.yres = Height;
+		VideoFrameV210.FourCC = NDIlib_FourCC_type_P216;
+		VideoFrameV210.p_data = (uint8_t*)InBuffer;
 	
-		NDIlib_video_frame_v2_t& video_frame_V216 = FrameBuffer->frame;
-		video_frame_V216.line_stride_in_bytes = video_frame_V210.xres * sizeof(uint16_t) * 4;
+		NDIlib_video_frame_v2_t& VideoFrameV216 = FrameBuffer->Frame;
+		VideoFrameV216.line_stride_in_bytes = VideoFrameV210.xres * sizeof(uint16_t) * 4;
 	
-		FrameBuffer->buffer.resize(video_frame_V216.line_stride_in_bytes * video_frame_V210.yres * sizeof(uint16_t));
+		FrameBuffer->Buffer.resize(VideoFrameV216.line_stride_in_bytes * VideoFrameV210.yres * sizeof(uint16_t));
 		
-		video_frame_V216.p_data = &FrameBuffer->buffer[0];
+		VideoFrameV216.p_data = &FrameBuffer->Buffer[0];
 	
-		NDIlib_util_V210_to_P216(&video_frame_V210, &video_frame_V216);
+		NDIlib_util_V210_to_P216(&VideoFrameV210, &VideoFrameV216);
 	}
 	else if (OutputPixelFormat == ENDIMediaOutputPixelFormat::NDI_PF_RGB)
 	{
-		const uint8_t* ptr = (const uint8_t*)InBuffer;
-		FrameBuffer->buffer.assign(ptr, ptr + (BytesPerRow * Height));
+		const uint8_t* Ptr = (const uint8_t*)InBuffer;
+		FrameBuffer->Buffer.assign(Ptr, Ptr + (BytesPerRow * Height));
 		
-		NDIlib_video_frame_v2_t& video_frame_rgb = FrameBuffer->frame;
-		video_frame_rgb.line_stride_in_bytes = Width * 4;
-		video_frame_rgb.xres = Width;
-		video_frame_rgb.yres = Height;
-		video_frame_rgb.FourCC = NDIlib_FourCC_type_BGRX;
-		video_frame_rgb.p_data = &FrameBuffer->buffer[0];
+		NDIlib_video_frame_v2_t& VideoFrameRgb = FrameBuffer->Frame;
+		VideoFrameRgb.line_stride_in_bytes = Width * 4;
+		VideoFrameRgb.xres = Width;
+		VideoFrameRgb.yres = Height;
+		VideoFrameRgb.FourCC = NDIlib_FourCC_type_BGRA; // NDIlib_FourCC_type_BGRX;
+		VideoFrameRgb.p_data = &FrameBuffer->Buffer[0];
 	}
 
 	{
@@ -117,13 +120,13 @@ void UNDIMediaCapture::OnFrameCaptured_RenderingThread(const FCaptureBaseData& I
 	}
 }
 
-bool UNDIMediaCapture::InitNDI(UNDIMediaOutput* Output)
+bool UNDIMediaCapture::InitNdi(UNDIMediaOutput* Output)
 {
 	FScopeLock ScopeLock(&RenderThreadCriticalSection);
 
-	NDIlib_send_create_t settings;
-	settings.p_ndi_name = TCHAR_TO_ANSI(*Output->SourceName);
-	pNDI_send = NDIlib_send_create(&settings);
+	NDIlib_send_create_t Settings;
+	Settings.p_ndi_name = TCHAR_TO_ANSI(*Output->SourceName);
+	pNDI_send = NDIlib_send_create(&Settings);
 
 	if (!pNDI_send)
 	{
@@ -138,37 +141,37 @@ bool UNDIMediaCapture::InitNDI(UNDIMediaOutput* Output)
 	const int N = 4;
 	FrameBuffers.resize(N);
 
-	for (int i = 0; i < FrameBuffers.size(); i++)
-		FrameBuffers[i] = new NDIFrameBuffer();
+	for (int I = 0; I < FrameBuffers.size(); I++)
+		FrameBuffers[I] = new FNdiFrameBuffer();
 
 	NDISendThreadRunning = true;
 	NDISendThread = std::thread([this]()
 	{
 		while (this->NDISendThreadRunning)
 		{
-			bool bHasFrame = false;
+			bool bHasQueue = false;
 
 			{
 				FScopeLock ScopeLock(&this->RenderThreadCriticalSection);
-				bHasFrame = !this->FrameBuffers.empty();
-			}
-			
-			if (!bHasFrame)
-			{
-				std::this_thread::sleep_for(std::chrono::milliseconds(1));
-				continue;
+				bHasQueue = this->FrameBuffers.size() > 0;
 			}
 
-			FScopeLock ScopeLock(&this->RenderThreadCriticalSection);
-			
-			while (!this->FrameBuffers.empty())
+			if (bHasQueue)
 			{
-				NDIFrameBuffer* FrameBuffer = FrameBuffer = this->FrameBuffers.front();
-				this->FrameBuffers.pop_front();
+				FNdiFrameBuffer* FrameBuffer = nullptr;
+				{
+					FScopeLock ScopeLock(&this->RenderThreadCriticalSection);
+					FrameBuffer = this->FrameBuffers.front();
+					this->FrameBuffers.pop_front();
+				}
 
-				NDIlib_send_send_video_v2(pNDI_send, &FrameBuffer->frame);
+				NDIlib_send_send_video_v2(pNDI_send, &FrameBuffer->Frame);
 				
 				delete FrameBuffer;
+			}
+			else
+			{
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			}
 		}
 	});
@@ -176,7 +179,7 @@ bool UNDIMediaCapture::InitNDI(UNDIMediaOutput* Output)
 	return true;
 }
 
-bool UNDIMediaCapture::DisposeNDI()
+bool UNDIMediaCapture::DisposeNdi()
 {
 	FScopeLock ScopeLock(&RenderThreadCriticalSection);
 
@@ -189,8 +192,8 @@ bool UNDIMediaCapture::DisposeNDI()
 		pNDI_send = nullptr;
 	}
 
-	for (int i = 0; i < FrameBuffers.size(); i++)
-		delete FrameBuffers[i];
+	for (int I = 0; I < FrameBuffers.size(); I++)
+		delete FrameBuffers[I];
 
 	FrameBuffers.clear();
 	

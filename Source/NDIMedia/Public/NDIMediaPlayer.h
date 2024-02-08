@@ -60,7 +60,6 @@ class NDIMEDIA_API FNDIMediaPlayer
 	FNDIMediaBinarySamplePool* MetadataSamplePool;
 
 	TUniquePtr<FNDIMediaPlayerThread> Thread;
-	bool bInIsSRGBInput;
 
 	void OnInputFrameReceived(NDIlib_video_frame_v2_t* video_frame);
 	
@@ -86,10 +85,6 @@ public:
 
 #if WITH_EDITOR
 	virtual const FSlateBrush* GetDisplayIcon() const override;
-#endif
-
-#if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 3
-	virtual TSharedPtr<FMediaIOCoreTextureSampleBase> AcquireTextureSample_AnyThread() const override;
 #endif
 
 	FNDIMediaPlayerFrameMetadataReceivedDelegate FrameMetadataReceivedDelegate;
