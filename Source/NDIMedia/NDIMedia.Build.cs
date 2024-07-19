@@ -121,7 +121,7 @@ public class NDIMedia : ModuleRules
 		
 		PublicDelayLoadDLLs.Add(ndi_dll_path);
 		RuntimeDependencies.Add("$(TargetOutputDir)/Processing.NDI.Lib.x64.dll",      Path.Combine(GetPluginPath(), "Binaries", "Win64", "Processing.NDI.Lib.x64.dll"));
-        RuntimeDependencies.Add("$(TargetOutputDir)/UnrealEditor-NDIMedia.dll",		  Path.Combine(GetPluginPath(), "Binaries", "Win64", "UnrealEditor-NDIMedia.dll"));
-        RuntimeDependencies.Add("$(TargetOutputDir)/UnrealEditor-NDIMediaEditor.dll", Path.Combine(GetPluginPath(), "Binaries", "Win64", "UnrealEditor-NDIMediaEditor.dll"));
+        //RuntimeDependencies.Add("$(TargetOutputDir)/UnrealEditor-NDIMedia.dll",		  Path.Combine(GetPluginPath(), "Binaries", "Win64", "UnrealEditor-NDIMedia.dll"));
+        //RuntimeDependencies.Add("$(TargetOutputDir)/UnrealEditor-NDIMediaEditor.dll", Path.Combine(GetPluginPath(), "Binaries", "Win64", "UnrealEditor-NDIMediaEditor.dll"));
     }
 }
