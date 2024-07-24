@@ -98,6 +98,7 @@ public class NDIMedia : ModuleRules
 				"CinematicCamera",
 				"OpenColorIO",
 				"MovieSceneCapture",
+				"MediaFrameworkUtilities",
 				// ... add private dependencies that you statically link with here ...	
 			}
 			);
@@ -120,8 +121,5 @@ public class NDIMedia : ModuleRules
 		CopyToProjectBinaries(ndi_dll_path, Target);
 		
 		PublicDelayLoadDLLs.Add(ndi_dll_path);
-		RuntimeDependencies.Add("$(TargetOutputDir)/Processing.NDI.Lib.x64.dll",      Path.Combine(GetPluginPath(), "Binaries", "Win64", "Processing.NDI.Lib.x64.dll"));
-        //RuntimeDependencies.Add("$(TargetOutputDir)/UnrealEditor-NDIMedia.dll",		  Path.Combine(GetPluginPath(), "Binaries", "Win64", "UnrealEditor-NDIMedia.dll"));
-        //RuntimeDependencies.Add("$(TargetOutputDir)/UnrealEditor-NDIMediaEditor.dll", Path.Combine(GetPluginPath(), "Binaries", "Win64", "UnrealEditor-NDIMediaEditor.dll"));
-    }
+	}
 }
