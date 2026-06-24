@@ -1,64 +1,52 @@
-﻿// Fill out your copyright notice in the Description page of Project Settings.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
-#include <thread>
-#include <atomic>
-#include <deque>
-
-#include "CoreMinimal.h"
 #include "MediaCapture.h"
-#include "NDIMediaOutput.h"
-
-#define PROCESSINGNDILIB_STATIC
-#include <Processing.NDI.Lib.h>
-#include <Processing.NDI.Lib.cplusplus.h>
+#include "HAL/CriticalSection.h"
 
 #include "NDIMediaCapture.generated.h"
 
-class UNDIMediaOutput;
-struct NDIFrameBuffer;
-
-UCLASS(BlueprintType)
-class NDIMEDIA_API UNDIMediaCapture
-	: public UMediaCapture
+/**
+ * 
+ */
+UCLASS()
+class NDIMEDIA_API UNDIMediaCapture : public UMediaCapture
 {
-	GENERATED_UCLASS_BODY()
+	GENERATED_BODY()
+
 public:
-	virtual bool HasFinishedProcessing() const override;
-	
+	virtual ~UNDIMediaCapture();
+
 protected:
-	virtual bool ValidateMediaOutput() const override;
-
-#if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 1
+	//~ Begin UMediaCapture
+	virtual void OnFrameCaptured_RenderingThread(const FCaptureBaseData& InBaseData, TSharedPtr<FMediaCaptureUserData, ESPMode::ThreadSafe> InUserData, void* InBuffer, int32 Width, int32 Height, int32 BytesPerRow) override;
+	virtual void OnFrameCaptured_AnyThread(const FCaptureBaseData& InBaseData, TSharedPtr<FMediaCaptureUserData, ESPMode::ThreadSafe> InUserData, const FMediaCaptureResourceData& InResourceData) override;
 	virtual bool InitializeCapture() override;
-#else
-	virtual bool CaptureSceneViewportImpl(TSharedPtr<FSceneViewport>& InSceneViewport) override;
-	virtual bool CaptureRenderTargetImpl(UTextureRenderTarget2D* InRenderTarget) override;
-#endif
-	
-	virtual bool UpdateSceneViewportImpl(TSharedPtr<FSceneViewport>& InSceneViewport) override;
-	virtual bool UpdateRenderTargetImpl(UTextureRenderTarget2D* InRenderTarget) override;
+	virtual bool PostInitializeCaptureViewport(TSharedPtr<FSceneViewport>& InSceneViewport) override;
+	virtual bool PostInitializeCaptureRenderTarget(UTextureRenderTarget2D* InRenderTarget) override;
+	virtual bool PostInitializeCaptureRHIResource(const FRHICaptureResourceDescription& InResourceDescription) override;
+	virtual bool UpdateAudioDeviceImpl(const FAudioDeviceHandle& InAudioDeviceHandle) override;
 	virtual void StopCaptureImpl(bool bAllowPendingFrameToBeProcess) override;
-
-	virtual void OnFrameCaptured_RenderingThread(const FCaptureBaseData& InBaseData,
-												 TSharedPtr<FMediaCaptureUserData, ESPMode::ThreadSafe> InUserData,
-												 void* InBuffer, int32 Width, int32 Height, int32 BytesPerRow) override;
+	virtual bool SupportsAnyThreadCapture() const override;
+	//~ End UMediaCapture
 
 private:
-	
-	NDIlib_send_instance_t pNDI_send;
+	bool StartNewCapture();
 
-	FCriticalSection RenderThreadCriticalSection;
-	ENDIMediaOutputPixelFormat OutputPixelFormat;
-	FFrameRate OutputFrameRate;
+	/** Sends the captured buffer to NDI. */
+	void OnFrameCapturedImpl(const FCaptureBaseData& InBaseData, void* InBuffer, int32 Width, int32 Height, int32 BytesPerRow);
 
-	std::deque<NDIFrameBuffer*> FrameBuffers;
-	uint8_t CurrentFrameBufferIndex = 0;
+private:
+	FCriticalSection CaptureInstanceCriticalSection;
 
-	std::thread NDISendThread;
-	std::atomic_bool NDISendThreadRunning = false;
+	// @note:
+	// It is unclear at this point of our design if UNDIMediaCapture should 
+	// be public, but because it is, to maximize our options for now, we don't
+	// want NDI SDK headers to be public with it, so we use a pimpl for now.
 
-	bool InitNDI(UNDIMediaOutput* Output);
-	bool DisposeNDI();
+	// Private implementation
+
+	class FNDICaptureInstance;
+	FNDICaptureInstance* CaptureInstance = nullptr;
 };

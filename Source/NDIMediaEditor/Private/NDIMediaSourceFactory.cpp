@@ -1,26 +1,21 @@
-﻿// Fill out your copyright notice in the Description page of Project Settings.
-
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NDIMediaSourceFactory.h"
 
-#include <AssetTypeCategories.h>
-
-#include "NDIMedia/Public/NDIMediaSource.h"
-
-#define LOCTEXT_NAMESPACE "NDIMediaSourceFactory"
+#include "AssetTypeCategories.h"
+#include "NDIMediaSource.h"
 
 UNDIMediaSourceFactory::UNDIMediaSourceFactory(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
-	this->bCreateNew = true;
-	this->bEditAfterNew = true;
-
-	this->SupportedClass = UNDIMediaSource::StaticClass();
+	SupportedClass = UNDIMediaSource::StaticClass();
+	bCreateNew = true;
+	bEditAfterNew = true;
 }
 
-FText UNDIMediaSourceFactory::GetDisplayName() const
+UObject* UNDIMediaSourceFactory::FactoryCreateNew(UClass* InClass, UObject* InParent, FName InName, EObjectFlags InFlags, UObject* InContext, FFeedbackContext* InWarn)
 {
-	return LOCTEXT("NDIMediaSourceFactoryDisplayName", "NDI Media Source");
+	return NewObject<UNDIMediaSource>(InParent, InClass, InName, InFlags);
 }
 
 uint32 UNDIMediaSourceFactory::GetMenuCategories() const
@@ -32,11 +27,3 @@ bool UNDIMediaSourceFactory::ShouldShowInNewMenu() const
 {
 	return true;
 }
-
-UObject* UNDIMediaSourceFactory::FactoryCreateNew(UClass* InClass, UObject* InParent, FName InName, EObjectFlags Flags,
-                                                  UObject* Context, FFeedbackContext* Warn)
-{
-	return NewObject<UNDIMediaSource>(InParent, InClass, InName, Flags | RF_Transactional);
-}
-
-#undef LOCTEXT_NAMESPACE

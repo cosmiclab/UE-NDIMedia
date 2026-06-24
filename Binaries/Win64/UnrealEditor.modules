@@ -1,8 +1,9 @@
 {
-	"BuildId": "23058290",
+	"BuildId": "47537391",
 	"Modules": 
 	{
 		"NDIMedia": "UnrealEditor-NDIMedia.dll",
-		"NDIMediaEditor": "UnrealEditor-NDIMediaEditor.dll"
+		"NDIMediaEditor": "UnrealEditor-NDIMediaEditor.dll",
+		"NDIMediaRendering": "UnrealEditor-NDIMediaRendering.dll"
 	}
 }
