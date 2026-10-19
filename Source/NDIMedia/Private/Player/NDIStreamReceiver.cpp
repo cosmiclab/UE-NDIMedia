@@ -20,6 +20,15 @@ static TAutoConsoleVariable<bool> CVarNDIUseFrameSync(
 	TEXT("Use the ndi frame synchronization api to capture video and audio. Note: need to restart the streams for this cvar to take effect."),
 	ECVF_Default);
 
+// Receiver color format preference.
+// 0 = best (default, may return P216/PA16 when available)
+// 1 = fastest (legacy behavior, typically UYVY/UYVA)
+static TAutoConsoleVariable<int32> CVarNDIReceiverColorFormat(
+	TEXT("NDIMediaReceiver.ColorFormat"),
+	0,
+	TEXT("Receiver color format preference. 0=best (default), 1=fastest. Note: need to restart the streams for this cvar to take effect."),
+	ECVF_Default);
+
 namespace UE::NDIStreamReceiver::Private
 {
 	NDIlib_recv_bandwidth_e GetNDIBandwidth(ENDIReceiverBandwidth InBandwidth)
@@ -36,6 +45,18 @@ namespace UE::NDIStreamReceiver::Private
 			return NDIlib_recv_bandwidth_lowest;
 		default:
 			return NDIlib_recv_bandwidth_highest;
+		}
+	}
+
+	NDIlib_recv_color_format_e GetNDIRecvColorFormat()
+	{
+		switch (CVarNDIReceiverColorFormat.GetValueOnAnyThread())
+		{
+		case 1:
+			return NDIlib_recv_color_format_fastest;
+		case 0:
+		default:
+			return NDIlib_recv_color_format_best;
 		}
 	}
 
@@ -73,13 +94,13 @@ bool FNDIStreamReceiver::Initialize(const FNDISourceSettings& InSourceSettings, 
 		NDIlib_recv_create_v3_t ReceiveSettings;
 		ReceiveSettings.allow_video_fields = false;
 		ReceiveSettings.bandwidth = NDIlib_recv_bandwidth_highest;
-		ReceiveSettings.color_format = NDIlib_recv_color_format_fastest;
+		ReceiveSettings.color_format = UE::NDIStreamReceiver::Private::GetNDIRecvColorFormat();
 
 		ReceiveInstance = NdiLib->Lib->recv_create_v3(&ReceiveSettings);
 		
 		if (!ReceiveInstance)
 		{
-			UE_LOG(LogNDIMedia, Error, TEXT("Failed to create NDI receiver."));
+			UE_LOGF(LogNDIMedia, Error, "Failed to create NDI receiver.");
 			return false;
 		}
 	}
@@ -139,7 +160,7 @@ void FNDIStreamReceiver::StartConnection()
 		NDIlib_recv_create_v3_t ReceiveSettings;
 		ReceiveSettings.allow_video_fields = true;
 		ReceiveSettings.bandwidth = UE::NDIStreamReceiver::Private::GetNDIBandwidth(SourceSettings.Bandwidth);
-		ReceiveSettings.color_format = NDIlib_recv_color_format_fastest;
+		ReceiveSettings.color_format = UE::NDIStreamReceiver::Private::GetNDIRecvColorFormat();
 
 		// Do the conversion on the connection information
 		NDIlib_source_t SourceInfo;

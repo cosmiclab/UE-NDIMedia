@@ -27,9 +27,21 @@ private:
 	/** Cache the last frame size of the texture objects. */
 	FIntPoint PreviousFrameSize = FIntPoint(0, 0);
 
-	/** Source YUV texture */
+	/** Cache the previous conversion mode (FNDIMediaTextureSample::ECustomConversionMode as uint8). */
+	uint8 PreviousConversionMode = 0;
+
+	/** Source texture for UYVA converter path. */
 	FTextureRHIRef SourceYUVTexture;
 
-	/** Source Alpha texture */
+	/** Source alpha texture for UYVA converter path. */
 	FTextureRHIRef SourceAlphaTexture;
+
+	/** Source luma texture for P216/PA16 converter paths. */
+	FTextureRHIRef SourceYTexture;
+
+	/** Source chroma texture for P216/PA16 converter paths. */
+	FTextureRHIRef SourceUVTexture;
+
+	/** Source alpha texture for PA16 converter path. */
+	FTextureRHIRef SourceA16Texture;
 };

@@ -26,9 +26,15 @@ protected:
 	virtual bool PostInitializeCaptureViewport(TSharedPtr<FSceneViewport>& InSceneViewport) override;
 	virtual bool PostInitializeCaptureRenderTarget(UTextureRenderTarget2D* InRenderTarget) override;
 	virtual bool PostInitializeCaptureRHIResource(const FRHICaptureResourceDescription& InResourceDescription) override;
+	virtual bool PostInitializeCaptureMediaTexture(UMediaTexture* InMediaTexture) override;
 	virtual bool UpdateAudioDeviceImpl(const FAudioDeviceHandle& InAudioDeviceHandle) override;
 	virtual void StopCaptureImpl(bool bAllowPendingFrameToBeProcess) override;
 	virtual bool SupportsAnyThreadCapture() const override;
+	
+#if WITH_EDITOR
+	virtual bool ShouldAutoRecordCaptureStartedEvent() const override;
+	virtual FString GetAnalyticsEventPrefix() const override;
+#endif
 	//~ End UMediaCapture
 
 private:

@@ -22,7 +22,7 @@ namespace UE::NDIMediaTextureSampleConverter
 		}
 		else
 		{
-			OutColorSpaceMatrix = UE::Color::Transpose<float>(UE::Color::FColorSpaceTransform(InSample->GetSourceColorSpace(), Working));
+			OutColorSpaceMatrix = UE::Color::Transpose<float>(UE::Color::FColorSpaceTransform(InSample->GetSourceColorSpace(), Working, InSample->GetChromaticAdapationMethod()));
 		}
 	
 		const float NormalizationFactor = InSample->GetHDRNitsNormalizationFactor();
@@ -94,15 +94,14 @@ bool FNDIMediaTextureSampleConverter::Convert(FRHICommandListImmediate& InRHICmd
 		GraphicsPSOInit.BoundShaderState.VertexDeclarationRHI = GMediaVertexDeclaration.VertexDeclarationRHI;
 		GraphicsPSOInit.BoundShaderState.VertexShaderRHI = VertexShader.GetVertexShader();
 
-		// Note: this convert supports only one shader, all others are already supported by media shaders.
-		{	// --- Setup UYVA to BGRA Pixel shader ---
+		if (Sample->CustomConversionMode == FNDIMediaTextureSample::ECustomConversionMode::UYVA8)
+		{
 			TShaderMapRef<FNDIMediaShaderUYVAtoBGRAPS> ConvertShader(ShaderMap);
 			GraphicsPSOInit.BoundShaderState.PixelShaderRHI = ConvertShader.GetPixelShader();
 
-			// Ensure the pipeline state is set to the one we've configured
+			// Ensure the pipeline state is set to the one we've configured.
 			SetGraphicsPipelineState(InRHICmdList, GraphicsPSOInit, 0);
-	
-			// set the texture parameter of the conversion shader
+
 			FNDIMediaShaderUYVAtoBGRAPS::FParameters Params(
 				SourceYUVTexture,
 				SourceAlphaTexture,
@@ -113,6 +112,49 @@ bool FNDIMediaTextureSampleConverter::Convert(FRHICommandListImmediate& InRHICmd
 				Sample->GetToneMapMethod());
 
 			SetShaderParametersLegacyPS(InRHICmdList, ConvertShader, Params);
+		}
+		else if (Sample->CustomConversionMode == FNDIMediaTextureSample::ECustomConversionMode::P216)
+		{
+			TShaderMapRef<FNDIMediaShaderP216toBGRAPS> ConvertShader(ShaderMap);
+			GraphicsPSOInit.BoundShaderState.PixelShaderRHI = ConvertShader.GetPixelShader();
+
+			// Ensure the pipeline state is set to the one we've configured.
+			SetGraphicsPipelineState(InRHICmdList, GraphicsPSOInit, 0);
+
+			FNDIMediaShaderP216toBGRAPS::FParameters Params(
+				SourceYTexture,
+				SourceUVTexture,
+				OutputSize,
+				Sample->GetSampleToRGBMatrix(),
+				Sample->GetEncodingType(),
+				UE::NDIMediaTextureSampleConverter::GetColorSpaceConversionMatrixForSample(Sample),
+				Sample->GetToneMapMethod());
+
+			SetShaderParametersLegacyPS(InRHICmdList, ConvertShader, Params);
+		}
+		else if (Sample->CustomConversionMode == FNDIMediaTextureSample::ECustomConversionMode::PA16)
+		{
+			TShaderMapRef<FNDIMediaShaderPA16toBGRAPS> ConvertShader(ShaderMap);
+			GraphicsPSOInit.BoundShaderState.PixelShaderRHI = ConvertShader.GetPixelShader();
+
+			// Ensure the pipeline state is set to the one we've configured.
+			SetGraphicsPipelineState(InRHICmdList, GraphicsPSOInit, 0);
+
+			FNDIMediaShaderPA16toBGRAPS::FParameters Params(
+				SourceYTexture,
+				SourceUVTexture,
+				SourceA16Texture,
+				OutputSize,
+				Sample->GetSampleToRGBMatrix(),
+				Sample->GetEncodingType(),
+				UE::NDIMediaTextureSampleConverter::GetColorSpaceConversionMatrixForSample(Sample),
+				Sample->GetToneMapMethod());
+
+			SetShaderParametersLegacyPS(InRHICmdList, ConvertShader, Params);
+		}
+		else
+		{
+			return false;
 		}
 	
 		InRHICmdList.SetStreamSource(0, VertexBuffer, 0);
@@ -127,7 +169,7 @@ bool FNDIMediaTextureSampleConverter::Convert(FRHICommandListImmediate& InRHICmd
 
 bool FNDIMediaTextureSampleConverter::UpdateInputTextures(FRHICommandList& InRHICmdList, const TSharedPtr<FNDIMediaTextureSample>& InSample)
 {
-	const void* Buffer = InSample->GetBuffer();
+	const uint8* Buffer = static_cast<const uint8*>(InSample->GetBuffer());
 	
 	if (!Buffer)
 	{
@@ -136,44 +178,124 @@ bool FNDIMediaTextureSampleConverter::UpdateInputTextures(FRHICommandList& InRHI
 	
 	FIntPoint FieldSize = InSample->GetDim();
 	FIntPoint FrameSize = InSample->bIsProgressive ? FieldSize : FIntPoint(FieldSize.X, FieldSize.Y*2);
-
-	if (!SourceYUVTexture.IsValid() || FrameSize != PreviousFrameSize)
+	const FNDIMediaTextureSample::ECustomConversionMode ConversionMode = InSample->CustomConversionMode;
+	if (ConversionMode == FNDIMediaTextureSample::ECustomConversionMode::None)
 	{
-		// The source YUV texture will be given UYVY data, so make it half-width
-		const FRHITextureCreateDesc CreateDesc = FRHITextureCreateDesc::Create2D(TEXT("NDIMediaReceiverInterlacedAlphaSourceTexture"))
-			.SetExtent(FieldSize.X / 2, FieldSize.Y)
-			.SetFormat(PF_B8G8R8A8)
-			.SetNumMips(1)
-			.SetFlags(ETextureCreateFlags::RenderTargetable | ETextureCreateFlags::Dynamic);
-
-		SourceYUVTexture = InRHICmdList.CreateTexture(CreateDesc);
+		return false;
 	}
 
-	if (!SourceAlphaTexture.IsValid() || FrameSize != PreviousFrameSize)
-	{
-		const FRHITextureCreateDesc CreateAlphaDesc = FRHITextureCreateDesc::Create2D(TEXT("NDIMediaReceiverInterlacedAlphaSourceAlphaTexture"))
-			.SetExtent(FieldSize.X, FieldSize.Y)
-			.SetFormat(PF_A8)
-			.SetNumMips(1)
-			.SetFlags(ETextureCreateFlags::RenderTargetable | ETextureCreateFlags::Dynamic);
+	const bool bModeChanged = PreviousConversionMode != static_cast<uint8>(ConversionMode);
 
-		SourceAlphaTexture = InRHICmdList.CreateTexture(CreateAlphaDesc);
+	// Release textures belonging to paths not used by the new mode so they don't sit on the GPU
+	// until the converter is destroyed.
+	if (bModeChanged)
+	{
+		if (ConversionMode != FNDIMediaTextureSample::ECustomConversionMode::UYVA8)
+		{
+			SourceYUVTexture.SafeRelease();
+			SourceAlphaTexture.SafeRelease();
+		}
+		if (ConversionMode != FNDIMediaTextureSample::ECustomConversionMode::P216
+			&& ConversionMode != FNDIMediaTextureSample::ECustomConversionMode::PA16)
+		{
+			SourceYTexture.SafeRelease();
+			SourceUVTexture.SafeRelease();
+			SourceA16Texture.SafeRelease();
+		}
+		else if (ConversionMode == FNDIMediaTextureSample::ECustomConversionMode::P216)
+		{
+			SourceA16Texture.SafeRelease();
+		}
 	}
 
+	if (ConversionMode == FNDIMediaTextureSample::ECustomConversionMode::UYVA8)
+	{
+		if (!SourceYUVTexture.IsValid() || !SourceAlphaTexture.IsValid() || FrameSize != PreviousFrameSize || bModeChanged)
+		{
+			const FRHITextureCreateDesc CreateDesc = FRHITextureCreateDesc::Create2D(TEXT("NDIMediaReceiverInterlacedAlphaSourceTexture"))
+				.SetExtent(FieldSize.X / 2, FieldSize.Y)
+				.SetFormat(PF_B8G8R8A8)
+				.SetNumMips(1)
+				.SetFlags(ETextureCreateFlags::RenderTargetable | ETextureCreateFlags::Dynamic);
+			SourceYUVTexture = InRHICmdList.CreateTexture(CreateDesc);
+
+			const FRHITextureCreateDesc CreateAlphaDesc = FRHITextureCreateDesc::Create2D(TEXT("NDIMediaReceiverInterlacedAlphaSourceAlphaTexture"))
+				.SetExtent(FieldSize.X, FieldSize.Y)
+				.SetFormat(PF_A8)
+				.SetNumMips(1)
+				.SetFlags(ETextureCreateFlags::RenderTargetable | ETextureCreateFlags::Dynamic);
+			SourceAlphaTexture = InRHICmdList.CreateTexture(CreateAlphaDesc);
+		}
+
+		FUpdateTextureRegion2D YUVRegion(0, 0, 0, 0, FieldSize.X/2, FieldSize.Y);
+		InRHICmdList.UpdateTexture2D(SourceYUVTexture, 0, YUVRegion, InSample->GetStride(), const_cast<uint8*>(Buffer));
+		InRHICmdList.Transition(FRHITransitionInfo(SourceYUVTexture, ERHIAccess::Unknown, ERHIAccess::SRVMask));
+
+		FUpdateTextureRegion2D AlphaRegion(0, 0, 0, 0, FieldSize.X, FieldSize.Y);
+		InRHICmdList.UpdateTexture2D(SourceAlphaTexture, 0, AlphaRegion, FrameSize.X, const_cast<uint8*>(Buffer + (FieldSize.Y * InSample->GetStride())));
+		InRHICmdList.Transition(FRHITransitionInfo(SourceAlphaTexture, ERHIAccess::Unknown, ERHIAccess::SRVMask));
+	}
+	else if (ConversionMode == FNDIMediaTextureSample::ECustomConversionMode::P216
+		|| ConversionMode == FNDIMediaTextureSample::ECustomConversionMode::PA16)
+	{
+		const bool bHasAlphaPlane = (ConversionMode == FNDIMediaTextureSample::ECustomConversionMode::PA16);
+		const uint32 PairWidth = static_cast<uint32>((FieldSize.X + 1) / 2);
+		const uint32 LumaStride = InSample->GetStride();
+		if (LumaStride < static_cast<uint32>(FieldSize.X * static_cast<int32>(sizeof(uint16))))
+		{
+			return false;
+		}
+
+		if (!SourceYTexture.IsValid() || !SourceUVTexture.IsValid() || (bHasAlphaPlane && !SourceA16Texture.IsValid()) || FrameSize != PreviousFrameSize || bModeChanged)
+		{
+			const FRHITextureCreateDesc CreateYDesc = FRHITextureCreateDesc::Create2D(TEXT("NDIMediaReceiverP216SourceYTexture"))
+				.SetExtent(FieldSize.X, FieldSize.Y)
+				.SetFormat(PF_G16)
+				.SetNumMips(1)
+				.SetFlags(ETextureCreateFlags::ShaderResource | ETextureCreateFlags::Dynamic);
+			SourceYTexture = InRHICmdList.CreateTexture(CreateYDesc);
+
+			const FRHITextureCreateDesc CreateUVDesc = FRHITextureCreateDesc::Create2D(TEXT("NDIMediaReceiverP216SourceUVTexture"))
+				.SetExtent(PairWidth, FieldSize.Y)
+				.SetFormat(PF_G16R16)
+				.SetNumMips(1)
+				.SetFlags(ETextureCreateFlags::ShaderResource | ETextureCreateFlags::Dynamic);
+			SourceUVTexture = InRHICmdList.CreateTexture(CreateUVDesc);
+
+			if (bHasAlphaPlane)
+			{
+				const FRHITextureCreateDesc CreateADesc = FRHITextureCreateDesc::Create2D(TEXT("NDIMediaReceiverPA16SourceATexture"))
+					.SetExtent(FieldSize.X, FieldSize.Y)
+					.SetFormat(PF_G16)
+					.SetNumMips(1)
+					.SetFlags(ETextureCreateFlags::ShaderResource | ETextureCreateFlags::Dynamic);
+				SourceA16Texture = InRHICmdList.CreateTexture(CreateADesc);
+			}
+		}
+
+		FUpdateTextureRegion2D YRegion(0, 0, 0, 0, FieldSize.X, FieldSize.Y);
+		InRHICmdList.UpdateTexture2D(SourceYTexture, 0, YRegion, LumaStride, const_cast<uint8*>(Buffer));
+		InRHICmdList.Transition(FRHITransitionInfo(SourceYTexture, ERHIAccess::Unknown, ERHIAccess::SRVMask));
+
+		const uint8* UVPlane = Buffer + (FieldSize.Y * LumaStride);
+		FUpdateTextureRegion2D UVRegion(0, 0, 0, 0, PairWidth, FieldSize.Y);
+		InRHICmdList.UpdateTexture2D(SourceUVTexture, 0, UVRegion, LumaStride, const_cast<uint8*>(UVPlane));
+		InRHICmdList.Transition(FRHITransitionInfo(SourceUVTexture, ERHIAccess::Unknown, ERHIAccess::SRVMask));
+
+		if (bHasAlphaPlane)
+		{
+			const uint8* APlane = UVPlane + (FieldSize.Y * LumaStride);
+			FUpdateTextureRegion2D ARegion(0, 0, 0, 0, FieldSize.X, FieldSize.Y);
+			InRHICmdList.UpdateTexture2D(SourceA16Texture, 0, ARegion, LumaStride, const_cast<uint8*>(APlane));
+			InRHICmdList.Transition(FRHITransitionInfo(SourceA16Texture, ERHIAccess::Unknown, ERHIAccess::SRVMask));
+		}
+	}
+	else
+	{
+		return false;
+	}
+
+	PreviousConversionMode = static_cast<uint8>(ConversionMode);
 	PreviousFrameSize = FrameSize;
-
-	// Update GPU textures from sample buffer
-	FUpdateTextureRegion2D YUVRegion(0, 0, 0, 0, FieldSize.X/2, FieldSize.Y);
-	InRHICmdList.UpdateTexture2D(SourceYUVTexture, 0, YUVRegion, InSample->GetStride(), (uint8*&)Buffer);
-
-	// Make sure resource is in SRV mode again
-	InRHICmdList.Transition(FRHITransitionInfo(SourceYUVTexture, ERHIAccess::Unknown, ERHIAccess::SRVMask));
-	
-	FUpdateTextureRegion2D AlphaRegion(0, 0, 0, 0, FieldSize.X, FieldSize.Y);
-	InRHICmdList.UpdateTexture2D(SourceAlphaTexture, 0, AlphaRegion, FrameSize.X, ((uint8*&)Buffer) + FieldSize.Y * InSample->GetStride());
-
-	// Make sure resource is in SRV mode again
-	InRHICmdList.Transition(FRHITransitionInfo(SourceAlphaTexture, ERHIAccess::Unknown, ERHIAccess::SRVMask));
-
 	return true;
 }

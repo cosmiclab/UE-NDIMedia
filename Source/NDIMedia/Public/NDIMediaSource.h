@@ -12,7 +12,7 @@
 /**
  * Media source for NDI streams.
  */
-UCLASS(MinimalAPI, BlueprintType, hideCategories=(Platforms,Object), PrioritizeCategories=(NDI, Video, Audio, Ancillary, Synchronization, Debug), meta=(MediaIOCustomLayout="NDI"))
+UCLASS(MinimalAPI, BlueprintType, hideCategories=(Platforms,Object), PrioritizeCategories=(NDI, Video, ColorManagement, Audio, Ancillary, Synchronization, Debug), meta=(MediaIOCustomLayout="NDI"))
 class UNDIMediaSource : public UCaptureCardMediaSource
 {
 	GENERATED_BODY()

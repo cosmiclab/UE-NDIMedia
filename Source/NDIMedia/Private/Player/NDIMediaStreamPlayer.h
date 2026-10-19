@@ -6,10 +6,10 @@
 #define NDI_SDK_ENABLED
 #endif // NDI_SDK_ENABLED
 
-
 #include "MediaIOCorePlayerBase.h"
 #include "../NDIMediaAPI.h"
 #include "UObject/ObjectKey.h"
+#include "ColorManagement/ColorSpace.h"
 
 class FNDIMediaAudioSamplePool;
 class FNDIMediaBinarySamplePool;
@@ -45,6 +45,7 @@ public:
 	 */
 	bool HasVideoSamplesWithCustomConverter() const;
 
+	/** Fired for every NDI metadata packet received (Cosmic Lab addition, used by EffectLibrary camera server). */
 	FNDIMediaPlayerFrameMetadataReceivedDelegate FrameMetadataReceivedDelegate;
 	virtual bool IsHardwareReady() const override;
 
@@ -54,6 +55,12 @@ protected:
 	virtual uint32 GetNumVideoFrameBuffers() const override;
 	virtual TSharedPtr<FMediaIOCoreTextureSampleBase> AcquireTextureSample_AnyThread() const override;
 	virtual TSharedPtr<FMediaIOCoreTextureSampleConverter> CreateTextureSampleConverter() const override;
+	
+#if WITH_EDITOR
+	virtual FString GetAnalyticsEventPrefix() const override { return TEXT("MediaFramework.NDI"); }
+	virtual void GetAnalyticsEventAttributes(const FString& EventName, TArray<FAnalyticsEventAttribute>& InOutAttributes) const override;
+	virtual bool ShouldAutoRecordSourceOpenedEvent() const override { return false; }
+#endif
 	//~ End FMediaIOCorePlayerBase
 
 public:
@@ -74,11 +81,22 @@ private:
 	/** Callback handler for audio frame reception. */
 	void HandleAudioFrameReceived(FNDIStreamReceiver* InReceiver, const NDIlib_audio_frame_v2_t& InAudioFrame, const FTimespan& InTime);
 
+	/** Callback handler for metadata reception. */
+	void HandleMetaDataReceived(FNDIStreamReceiver* InReceiver, FString InData, bool bInAttachedToVideoFrame);
+
+	/** Callback handler for metadata frame reception; queues the frame as a binary media sample. */
 	void HandleMetadataFrameReceived(FNDIStreamReceiver* InReceiver, const NDIlib_metadata_frame_t& InMetadataFrame, const FTimespan& InTime);
 
-	void HandleMetadataReceived(FNDIStreamReceiver* InReceiver, FString Data, bool Params);
-
 	void VerifyFrameDropCount();
+
+	/** Update the color settings resulting from Ndi setting + media source overrides. */
+	void UpdateNdiColorSettings();
+
+	/** Parse and apply stream color metadata received from NDI. */
+	void ApplyNdiColorMetadata(const FString& InData);
+
+	/** Clear stream-derived color metadata. */
+	void ClearNdiColorMetadata();
 
 private:
 	/** Keep track of the options (media source) object this player was opened with to filter global events. */
@@ -86,7 +104,12 @@ private:
 
 	/** Indicate if currently in a reopening sequence. */
 	bool bIsReopening = false;
-	
+
+#if WITH_EDITOR
+	/** One-shot guard so the source-opened analytics event fires at most once per open. */
+	bool bHasRecordedSourceOpenedEvent = false;
+#endif
+
 	/** Maximum Audio Sample Pool size */
 	int32 MaxNumAudioFrameBuffer = 0;
 	
@@ -115,6 +138,9 @@ private:
 
 	/** Sample rate from the last audio frame received. */
 	uint32 NDIThreadAudioSampleRate = 0;
+
+	/** Container for local stream color settings. */
+	TSharedPtr<FNativeMediaSourceColorSettings, ESPMode::ThreadSafe> NdiColorSettings;
 	
 	/** The media event sink. */
 	IMediaEventSink& EventSink;
@@ -129,6 +155,16 @@ private:
 	FDelegateHandle MetadataFrameReceivedHandle;
 	FDelegateHandle ConnectedHandle;
 	FDelegateHandle DisconnectedHandle;
+
+	/** Protects stream color metadata values when metadata is received from another thread. */
+	mutable FCriticalSection MetadataColorSyncContext;
+
+	/** Latest stream-derived color metadata interpreted from NDI metadata packets. */
+	UE::Color::EEncoding StreamEncodingOverride = UE::Color::EEncoding::None;
+	TOptional<UE::Color::FColorSpace> StreamColorSpaceOverride;
+
+	/** Last metadata blob fed to ApplyNdiColorMetadata; used to skip re-parsing identical frame-attached metadata. */
+	FString LastAppliedMetadata;
 
 	/** Media Sample pools */
 	TUniquePtr<FNDIMediaTextureSamplePool> TextureSamplePool;

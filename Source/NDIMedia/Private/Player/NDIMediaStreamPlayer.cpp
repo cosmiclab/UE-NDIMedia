@@ -18,6 +18,16 @@
 #include "NDIMediaTextureSampleConverter.h"
 #include "NDIStreamReceiver.h"
 #include "NDIStreamReceiverManager.h"
+#include "Containers/StaticArray.h"
+#include "HAL/ThreadSafeCounter64.h"
+#include "Misc/ScopeLock.h"
+#include "XmlFile.h"
+
+#include "NDIMediaHdrValidation.h"
+
+#if WITH_EDITOR
+#include "EngineAnalytics.h"
+#endif
 
 #define LOCTEXT_NAMESPACE "NDIMediaPlayer"
 
@@ -42,9 +52,187 @@ class FNDIMediaAudioSamplePool : public TMediaObjectPool<FNDIMediaAudioSample>
  */
 class FNDIMediaBinarySamplePool : public TMediaObjectPool<FMediaIOCoreBinarySampleBase> { };
 
+namespace UE::NDIMediaStreamPlayer::Private
+{
+	struct FParsedNdiColorInfo
+	{
+		TOptional<UE::Color::EEncoding> Encoding;
+		TOptional<UE::Color::FColorSpace> ColorSpace;
+	};
+
+#if NDI_MEDIA_HDR_VALIDATION_TEST
+	static FThreadSafeCounter64 GHdrValidationFrameCounter(0);
+#endif
+
+	const FXmlNode* FindNodeByTagRecursive(const FXmlNode* InNode, const FString& InTag)
+	{
+		if (!InNode)
+		{
+			return nullptr;
+		}
+
+		if (InNode->GetTag().Equals(InTag, ESearchCase::IgnoreCase))
+		{
+			return InNode;
+		}
+
+		for (const FXmlNode* ChildNode : InNode->GetChildrenNodes())
+		{
+			if (const FXmlNode* FoundNode = FindNodeByTagRecursive(ChildNode, InTag))
+			{
+				return FoundNode;
+			}
+		}
+
+		return nullptr;
+	}
+
+	FString GetAttributeValueCaseInsensitive(const FXmlNode& InNode, const TCHAR* InAttributeName)
+	{
+		for (const FXmlAttribute& Attribute : InNode.GetAttributes())
+		{
+			if (Attribute.GetTag().Equals(InAttributeName, ESearchCase::IgnoreCase))
+			{
+				return Attribute.GetValue();
+			}
+		}
+
+		return FString();
+	}
+
+	template <uint32 NumAttributes>
+	FString GetFirstAttributeValueCaseInsensitive(const FXmlNode& InNode, const TStaticArray<const TCHAR*, NumAttributes>& InAttributeNames)
+	{
+		for (const TCHAR* AttributeName : InAttributeNames)
+		{
+			const FString Value = GetAttributeValueCaseInsensitive(InNode, AttributeName);
+			if (!Value.IsEmpty())
+			{
+				return Value;
+			}
+		}
+
+		return FString();
+	}
+
+	TOptional<UE::Color::EEncoding> ParseEncodingValue(const FString& InValue)
+	{
+		const FString Value = InValue.ToLower();
+
+		if (Value.Contains(TEXT("hlg")))
+		{
+			return UE::Color::EEncoding::HLG;
+		}
+
+		// NDI docs spell the PQ transfer as "bt_2100_pq"; st2084/smpte2084 are the SMPTE-style spellings.
+		if (Value.Contains(TEXT("2100_pq"))
+			|| Value.Contains(TEXT("st2084"))
+			|| Value.Contains(TEXT("st_2084"))
+			|| Value.Contains(TEXT("smpte2084")))
+		{
+			return UE::Color::EEncoding::ST2084;
+		}
+
+		if (Value.Contains(TEXT("srgb"))
+			|| Value.Contains(TEXT("709"))
+			|| Value.Contains(TEXT("1886"))
+			|| Value.Contains(TEXT("gamma")))
+		{
+			return UE::Color::EEncoding::sRGB;
+		}
+
+		return {};
+	}
+
+	TOptional<UE::Color::FColorSpace> ParseColorSpaceValue(const FString& InValue)
+	{
+		const FString Value = InValue.ToLower();
+
+		if (Value.Contains(TEXT("2020")) || Value.Contains(TEXT("2100")))
+		{
+			return UE::Color::FColorSpace::GetRec2020();
+		}
+
+		if (Value.Contains(TEXT("709")) || Value.Contains(TEXT("srgb")))
+		{
+			return UE::Color::FColorSpace::GetSRGB();
+		}
+
+		return {};
+	}
+
+	TOptional<FParsedNdiColorInfo> ParseNdiColorInfo(const FString& InMetadata)
+	{
+		// NDI HDR metadata reference:
+		// https://docs.ndi.video/all/developing-with-ndi/sdk/hdr
+		if (!InMetadata.Contains(TEXT("ndi_color_info"), ESearchCase::IgnoreCase))
+		{
+			return {};
+		}
+
+		FXmlFile XmlFile(InMetadata, EConstructMethod::ConstructFromBuffer);
+		if (!XmlFile.IsValid())
+		{
+			// Some senders emit metadata XML fragments. Wrap them into a synthetic root and parse again.
+			const FString WrappedMetadata = FString::Printf(TEXT("<root>%s</root>"), *InMetadata);
+			if (!XmlFile.LoadFile(WrappedMetadata, EConstructMethod::ConstructFromBuffer))
+			{
+				return {};
+			}
+		}
+
+		const FXmlNode* RootNode = XmlFile.GetRootNode();
+		const FXmlNode* ColorInfoNode = FindNodeByTagRecursive(RootNode, TEXT("ndi_color_info"));
+		if (!ColorInfoNode)
+		{
+			return {};
+		}
+
+		FParsedNdiColorInfo ParsedInfo;
+
+		const TStaticArray<const TCHAR*, 4> TransferAttributes = { TEXT("transfer"), TEXT("eotf"), TEXT("transfer_characteristic"), TEXT("transfer_characteristics") };
+		const FString TransferValue = GetFirstAttributeValueCaseInsensitive(*ColorInfoNode, TransferAttributes);
+		if (!TransferValue.IsEmpty())
+		{
+			ParsedInfo.Encoding = ParseEncodingValue(TransferValue);
+		}
+
+		const TStaticArray<const TCHAR*, 7> PrimariesAttributes = { TEXT("primaries"), TEXT("color_primaries"), TEXT("colour_primaries"), TEXT("gamut"), TEXT("colorspace"), TEXT("color_space"), TEXT("colourspace") };
+		const FString PrimariesValue = GetFirstAttributeValueCaseInsensitive(*ColorInfoNode, PrimariesAttributes);
+		if (!PrimariesValue.IsEmpty())
+		{
+			ParsedInfo.ColorSpace = ParseColorSpaceValue(PrimariesValue);
+		}
+
+		FString MatrixValue;
+		if (!ParsedInfo.ColorSpace.IsSet())
+		{
+			const TStaticArray<const TCHAR*, 3> MatrixAttributes = { TEXT("matrix"), TEXT("matrix_coefficients"), TEXT("matrix_coefs") };
+			MatrixValue = GetFirstAttributeValueCaseInsensitive(*ColorInfoNode, MatrixAttributes);
+			if (!MatrixValue.IsEmpty())
+			{
+				ParsedInfo.ColorSpace = ParseColorSpaceValue(MatrixValue);
+			}
+		}
+
+		if (!ParsedInfo.Encoding.IsSet() && !ParsedInfo.ColorSpace.IsSet())
+		{
+#if NDI_MEDIA_HDR_VALIDATION_TEST
+			UE_LOGF(LogNDIMedia, VeryVerbose, "[HDR-TEST] ndi_color_info found but no recognized transfer/primaries. transfer='%ls' primaries='%ls' matrix='%ls'",
+				*TransferValue, *PrimariesValue, *MatrixValue);
+#endif
+			return {};
+		}
+
+
+		return ParsedInfo;
+	}
+}
+
 FNDIMediaStreamPlayer::FNDIMediaStreamPlayer(IMediaEventSink& InEventSink)
 	: Super(InEventSink)
 	, NDIPlayerState(EMediaState::Closed)
+	, NdiColorSettings(MakeShared<FNativeMediaSourceColorSettings>())
 	, EventSink(InEventSink)
 	, TextureSamplePool(new FNDIMediaTextureSamplePool)
 	, AudioSamplePool(new FNDIMediaAudioSamplePool)
@@ -151,15 +339,16 @@ bool FNDIMediaStreamPlayer::Open(const FString& InUrl, const IMediaOptions* InOp
 	
 	if (!Receiver)
 	{
-		UE_LOG(LogNDIMedia, Error, TEXT("Failed to acquire NDI receiver."));
+		UE_LOGF(LogNDIMedia, Error, "Failed to acquire NDI receiver.");
 		return false;
 	}
 	
 	// Hook into the video and audio captures
+	ClearNdiColorMetadata();
 	VideoReceivedHandle = Receiver->OnVideoFrameReceived.AddRaw(this, &FNDIMediaStreamPlayer::HandleVideoFrameReceived);
-	MetadataFrameReceivedHandle = Receiver->OnMetadataFrameReceived.AddRaw(this, &FNDIMediaStreamPlayer::HandleMetadataFrameReceived);
-	MetadataReceivedHandle = Receiver->OnMetaDataReceived.AddRaw(this, &FNDIMediaStreamPlayer::HandleMetadataReceived);
 	AudioReceivedHandle = Receiver->OnAudioFrameReceived.AddRaw(this, &FNDIMediaStreamPlayer::HandleAudioFrameReceived);
+	MetadataReceivedHandle = Receiver->OnMetaDataReceived.AddRaw(this, &FNDIMediaStreamPlayer::HandleMetaDataReceived);
+	MetadataFrameReceivedHandle = Receiver->OnMetadataFrameReceived.AddRaw(this, &FNDIMediaStreamPlayer::HandleMetadataFrameReceived);
 
 	// Control the player's state based on the receiver connecting and disconnecting
 	ConnectedHandle = Receiver->OnConnected.AddLambda([this](FNDIStreamReceiver* receiver)
@@ -168,6 +357,7 @@ bool FNDIMediaStreamPlayer::Open(const FString& InUrl, const IMediaOptions* InOp
 	});
 	DisconnectedHandle = Receiver->OnDisconnected.AddLambda([this](FNDIStreamReceiver* receiver)
 	{
+		ClearNdiColorMetadata();
 		NDIPlayerState = EMediaState::Closed;
 	});
 
@@ -186,17 +376,21 @@ void FNDIMediaStreamPlayer::Close()
 {
 	NDIPlayerState = EMediaState::Closed;
 
+#if WITH_EDITOR
+	bHasRecordedSourceOpenedEvent = false;
+#endif
+
 	if (Receiver != nullptr)
 	{
 		// Disconnect from receiver events
 		Receiver->OnVideoFrameReceived.Remove(VideoReceivedHandle);
 		VideoReceivedHandle.Reset();
+		Receiver->OnAudioFrameReceived.Remove(AudioReceivedHandle);
+		AudioReceivedHandle.Reset();
 		Receiver->OnMetaDataReceived.Remove(MetadataReceivedHandle);
 		MetadataReceivedHandle.Reset();
 		Receiver->OnMetadataFrameReceived.Remove(MetadataFrameReceivedHandle);
 		MetadataFrameReceivedHandle.Reset();
-		Receiver->OnAudioFrameReceived.Remove(AudioReceivedHandle);
-		AudioReceivedHandle.Reset();
 		Receiver->OnConnected.Remove(ConnectedHandle);
 		ConnectedHandle.Reset();
 		Receiver->OnDisconnected.Remove(DisconnectedHandle);
@@ -208,6 +402,7 @@ void FNDIMediaStreamPlayer::Close()
 	TextureSamplePool->Reset();
 	AudioSamplePool->Reset();
 	MetadataSamplePool->Reset();
+	ClearNdiColorMetadata();
 
 #if WITH_EDITOR
 	if (!bIsReopening)
@@ -325,6 +520,15 @@ void FNDIMediaStreamPlayer::TickFetch(FTimespan InDeltaTime, FTimespan InTime)
 			{
 				VideoTrackFormat.Dim = Receiver->GetCurrentResolution();
 				NotifyVideoFormatDetected();
+
+#if WITH_EDITOR
+				// Defer the source-opened analytics until we have a real resolution from the receiver.
+				if (!bHasRecordedSourceOpenedEvent && VideoTrackFormat.Dim != FIntPoint::ZeroValue)
+				{
+					RecordSourceOpenedEvent();
+					bHasRecordedSourceOpenedEvent = true;
+				}
+#endif
 			}
 
 			// Detect changes in frame rate settings for timed data channels.
@@ -346,11 +550,27 @@ void FNDIMediaStreamPlayer::HandleVideoFrameReceived(FNDIStreamReceiver* InRecei
 		return;
 	}
 
+#if NDI_MEDIA_HDR_VALIDATION_TEST
+	const int64 FrameIndex = UE::NDIMediaStreamPlayer::Private::GHdrValidationFrameCounter.Increment();
+	UE_LOGF(LogNDIMedia, VeryVerbose,
+		"[HDR-TEST] VideoFrame#%lld FourCC=%ls (0x%08x) Dim=%dx%d Stride=%d MetadataAttached=%ls",
+		FrameIndex,
+		UE::NDIMediaStreamPlayer::Private::FourCCToString(InVideoFrame.FourCC),
+		static_cast<uint32>(InVideoFrame.FourCC),
+		InVideoFrame.xres,
+		InVideoFrame.yres,
+		InVideoFrame.line_stride_in_bytes,
+		InVideoFrame.p_metadata != nullptr ? TEXT("Yes") : TEXT("No"));
+#endif
+
+	if (InVideoFrame.p_metadata != nullptr)
+	{
+		ApplyNdiColorMetadata(UTF8_TO_TCHAR(InVideoFrame.p_metadata));
+	}
+
+	UpdateNdiColorSettings();
+
 	TSharedRef<FNDIMediaTextureSample> TextureSample = TextureSamplePool->AcquireShared();
-	
-	const UE::MediaIOCore::FColorFormatArgs ColorFormatArgs(
-		bOverrideSourceEncoding ?  static_cast<UE::Color::EEncoding>(OverrideSourceEncoding) : UE::Color::EEncoding::sRGB,
-		bOverrideSourceColorSpace ? static_cast<UE::Color::EColorSpace>(OverrideSourceColorSpace) : UE::Color::EColorSpace::sRGB);
 
 	FTimecode SourceTimecode = InReceiver->GetCurrentTimecode();
 
@@ -361,7 +581,7 @@ void FNDIMediaStreamPlayer::HandleVideoFrameReceived(FNDIStreamReceiver* InRecei
 		SampleTime = SourceTimecode.ToTimespan(InReceiver->GetCurrentFrameRate());
 	}
 
-	if (TextureSample->Initialize(InVideoFrame, ColorFormatArgs, SampleTime, SourceTimecode))
+	if (TextureSample->Initialize(InVideoFrame, NdiColorSettings, SampleTime, SourceTimecode))
 	{
 		if (TextureSample->CustomConverter)
 		{
@@ -403,28 +623,6 @@ void FNDIMediaStreamPlayer::HandleVideoFrameReceived(FNDIStreamReceiver* InRecei
 		
 		AddVideoSample(TextureSample);
 	}
-}
-
-void FNDIMediaStreamPlayer::HandleMetadataReceived(FNDIStreamReceiver* InReceiver, FString Data, bool Params)
-{
-	if (FrameMetadataReceivedDelegate.IsBound())
-		FrameMetadataReceivedDelegate.Execute(Data);
-}
-
-void FNDIMediaStreamPlayer::HandleMetadataFrameReceived(FNDIStreamReceiver* InReceiver, const NDIlib_metadata_frame_t& InMetadataFrame, const FTimespan& InTime)
-{
-	if (!InReceiver)
-	{
-		return;
-	}
-
-	TSharedRef<FMediaIOCoreBinarySampleBase> MetadataSample = MetadataSamplePool->AcquireShared();
-
-	FTimecode SourceTimecode = InReceiver->GetCurrentTimecode();
-	FTimespan SampleTime = InTime;
-	MetadataSample->Initialize((const uint8*)InMetadataFrame.p_data, InMetadataFrame.length, SampleTime, InReceiver->GetCurrentFrameRate(), SourceTimecode);
-
-	AddMetadataSample(MetadataSample);
 }
 
 void FNDIMediaStreamPlayer::HandleAudioFrameReceived(FNDIStreamReceiver* InReceiver, const NDIlib_audio_frame_v2_t& InAudioFrame, const FTimespan& InTime)
@@ -473,9 +671,173 @@ void FNDIMediaStreamPlayer::HandleAudioFrameReceived(FNDIStreamReceiver* InRecei
 	}
 }
 
+void FNDIMediaStreamPlayer::HandleMetadataFrameReceived(FNDIStreamReceiver* InReceiver, const NDIlib_metadata_frame_t& InMetadataFrame, const FTimespan& InTime)
+{
+	if (!InReceiver)
+	{
+		return;
+	}
+
+	TSharedRef<FMediaIOCoreBinarySampleBase> MetadataSample = MetadataSamplePool->AcquireShared();
+
+	const FTimecode SourceTimecode = InReceiver->GetCurrentTimecode();
+	MetadataSample->Initialize(reinterpret_cast<const uint8*>(InMetadataFrame.p_data), InMetadataFrame.length, InTime, InReceiver->GetCurrentFrameRate(), SourceTimecode);
+
+	AddMetadataSample(MetadataSample);
+}
+
+void FNDIMediaStreamPlayer::HandleMetaDataReceived(FNDIStreamReceiver* InReceiver, FString InData, bool bInAttachedToVideoFrame)
+{
+	// Cosmic Lab: forward every metadata packet to external listeners (EffectLibrary camera server).
+	if (FrameMetadataReceivedDelegate.IsBound())
+	{
+		FrameMetadataReceivedDelegate.Execute(InData);
+	}
+
+	if (InReceiver == nullptr || bInAttachedToVideoFrame)
+	{
+		return;
+	}
+
+	ApplyNdiColorMetadata(InData);
+}
+
+void FNDIMediaStreamPlayer::ApplyNdiColorMetadata(const FString& InData)
+{
+#if NDI_MEDIA_HDR_VALIDATION_TEST
+	UE_LOGF(LogNDIMedia, VeryVerbose, "[HDR-TEST] Metadata packet received (Chars=%d, Has ndi_color_info=%ls)",
+		InData.Len(),
+		InData.Contains(TEXT("ndi_color_info"), ESearchCase::IgnoreCase) ? TEXT("Yes") : TEXT("No"));
+#endif
+
+	// Senders that attach the same metadata blob to every video frame would otherwise re-parse
+	// XML each frame. Skip when the input hasn't changed since the last seen blob (cached below
+	// regardless of parse outcome, so repeatedly-unparseable blobs are also skipped).
+	{
+		FScopeLock Lock(&MetadataColorSyncContext);
+		if (LastAppliedMetadata.Equals(InData, ESearchCase::CaseSensitive))
+		{
+			return;
+		}
+		LastAppliedMetadata = InData;
+	}
+
+	const TOptional<UE::NDIMediaStreamPlayer::Private::FParsedNdiColorInfo> ParsedColorInfo = UE::NDIMediaStreamPlayer::Private::ParseNdiColorInfo(InData);
+	if (!ParsedColorInfo.IsSet())
+	{
+#if NDI_MEDIA_HDR_VALIDATION_TEST
+		if (InData.Contains(TEXT("ndi_color_info"), ESearchCase::IgnoreCase))
+		{
+			UE_LOGF(LogNDIMedia, Warning, "[HDR-TEST] Failed to parse ndi_color_info metadata. First 256 chars: %ls", *InData.Left(256));
+		}
+#endif
+		return;
+	}
+
+	FScopeLock Lock(&MetadataColorSyncContext);
+	if (ParsedColorInfo->Encoding.IsSet())
+	{
+		StreamEncodingOverride = ParsedColorInfo->Encoding.GetValue();
+	}
+
+	if (ParsedColorInfo->ColorSpace.IsSet())
+	{
+		StreamColorSpaceOverride = ParsedColorInfo->ColorSpace;
+	}
+
+#if NDI_MEDIA_HDR_VALIDATION_TEST
+	UE_LOGF(LogNDIMedia, VeryVerbose, "[HDR-TEST] Stream overrides updated from metadata: Encoding=%ls ColorSpace=%ls",
+		StreamEncodingOverride != UE::Color::EEncoding::None ? UE::NDIMediaStreamPlayer::Private::EncodingToString(StreamEncodingOverride) : TEXT("Unset"),
+		StreamColorSpaceOverride.IsSet() ? *UE::NDIMediaStreamPlayer::Private::ColorSpaceToString(StreamColorSpaceOverride.GetValue()) : TEXT("Unset"));
+#endif
+}
+
+void FNDIMediaStreamPlayer::ClearNdiColorMetadata()
+{
+	FScopeLock Lock(&MetadataColorSyncContext);
+	StreamEncodingOverride = UE::Color::EEncoding::None;
+	StreamColorSpaceOverride.Reset();
+	LastAppliedMetadata.Reset();
+
+#if NDI_MEDIA_HDR_VALIDATION_TEST
+	UE_LOGF(LogNDIMedia, VeryVerbose, "[HDR-TEST] Cleared stream color metadata overrides.");
+#endif
+}
+
 void FNDIMediaStreamPlayer::VerifyFrameDropCount()
 {
 	// todo
+}
+
+void FNDIMediaStreamPlayer::UpdateNdiColorSettings()
+{
+	if (!NdiColorSettings)
+	{
+		NdiColorSettings = MakeShared<FNativeMediaSourceColorSettings>();
+	}
+
+	// First, we default to SDR as a fallback
+	NdiColorSettings->SetEncodingOverride(UE::Color::EEncoding::sRGB);
+	NdiColorSettings->SetColorSpaceOverride(UE::Color::FColorSpace::GetSRGB());
+	NdiColorSettings->SetReferenceWhiteOverride(UE::Color::EReferenceWhite::None);
+
+#if NDI_MEDIA_HDR_VALIDATION_TEST
+	const UE::Color::EEncoding PreSourceEncoding = NdiColorSettings->GetEncodingOverride();
+	const UE::Color::FColorSpace PreSourceColorSpace = NdiColorSettings->GetColorSpaceOverride(UE::Color::FColorSpace::GetSRGB());
+#endif
+
+	// Next, we apply metadata read from the NDI stream
+	{
+		FScopeLock Lock(&MetadataColorSyncContext);
+
+		if (StreamEncodingOverride != UE::Color::EEncoding::None)
+		{
+			NdiColorSettings->SetEncodingOverride(StreamEncodingOverride);
+		}
+
+		if (StreamColorSpaceOverride.IsSet())
+		{
+			NdiColorSettings->SetColorSpaceOverride(StreamColorSpaceOverride.GetValue());
+		}
+	}
+
+	// Finally, we optionally apply user overrides
+	if (SourceColorSettings)
+	{
+		if (SourceColorSettings->HasEncodingOverride())
+		{
+			NdiColorSettings->SetEncodingOverride(SourceColorSettings->GetEncodingOverride());
+			// Reference white is only meaningful paired with an explicit encoding override.
+			NdiColorSettings->SetReferenceWhiteOverride(SourceColorSettings->GetReferenceWhiteOverride());
+		}
+		if (SourceColorSettings->HasColorSpaceOverride())
+		{
+			NdiColorSettings->SetColorSpaceOverride(SourceColorSettings->GetColorSpaceOverride(UE::Color::FColorSpace::GetSRGB()));
+		}
+	}
+
+#if NDI_MEDIA_HDR_VALIDATION_TEST
+	const bool bSourceHasEncodingOverride = SourceColorSettings ? SourceColorSettings->HasEncodingOverride() : false;
+	const bool bSourceHasColorSpaceOverride = SourceColorSettings ? SourceColorSettings->HasColorSpaceOverride() : false;
+	const UE::Color::EEncoding SourceEncoding =
+		(bSourceHasEncodingOverride && SourceColorSettings)
+			? SourceColorSettings->GetEncodingOverride()
+			: UE::Color::EEncoding::None;
+	const UE::Color::FColorSpace SourceColorSpace =
+		(bSourceHasColorSpaceOverride && SourceColorSettings)
+			? SourceColorSettings->GetColorSpaceOverride(UE::Color::FColorSpace::GetSRGB())
+			: UE::Color::FColorSpace::GetSRGB();
+
+	UE_LOGF(LogNDIMedia, VeryVerbose,
+		"[HDR-TEST] PreSource NdiColorSettings: Encoding=%ls ColorSpace=%ls | MediaSource Overrides: HasEncoding=%ls(%ls) HasColorSpace=%ls(%ls)",
+		UE::NDIMediaStreamPlayer::Private::EncodingToString(PreSourceEncoding),
+		*UE::NDIMediaStreamPlayer::Private::ColorSpaceToString(PreSourceColorSpace),
+		bSourceHasEncodingOverride ? TEXT("Yes") : TEXT("No"),
+		bSourceHasEncodingOverride ? UE::NDIMediaStreamPlayer::Private::EncodingToString(SourceEncoding) : TEXT("N/A"),
+		bSourceHasColorSpaceOverride ? TEXT("Yes") : TEXT("No"),
+		bSourceHasColorSpaceOverride ? *UE::NDIMediaStreamPlayer::Private::ColorSpaceToString(SourceColorSpace) : TEXT("N/A"));
+
+#endif
 }
 
 bool FNDIMediaStreamPlayer::IsHardwareReady() const
@@ -579,6 +941,37 @@ TSharedPtr<FMediaIOCoreTextureSampleConverter> FNDIMediaStreamPlayer::CreateText
 {
 	return MakeShared<FNDIMediaTextureSampleConverterWrapper>();
 }
+
+#if WITH_EDITOR
+void FNDIMediaStreamPlayer::GetAnalyticsEventAttributes(const FString& EventName,TArray<FAnalyticsEventAttribute>& InOutAttributes) const
+{
+	if (!Receiver.IsValid())
+	{
+		return;
+	}
+
+	const FIntPoint& Resolution = Receiver->GetCurrentResolution();
+	InOutAttributes.Add(FAnalyticsEventAttribute(TEXT("ResolutionWidth"), FString::Printf(TEXT("%d"), Resolution.X)));
+	InOutAttributes.Add(FAnalyticsEventAttribute(TEXT("ResolutionHeight"), FString::Printf(TEXT("%d"), Resolution.Y)));
+	InOutAttributes.Add(FAnalyticsEventAttribute(TEXT("FrameRate"), Receiver->GetCurrentFrameRate().ToPrettyText().ToString()));
+
+	if (StreamColorSpaceOverride.IsSet())
+	{
+		const UE::Color::FColorSpace& ColorSpace = StreamColorSpaceOverride.GetValue();
+		FVector2d Red, Green, Blue, White;
+		ColorSpace.GetChromaticities(Red, Green, Blue, White);
+		const FString ColorSpaceStr = FString::Format(TEXT("R:{0} G:{1} B:{2} W:{3}"), { Red.ToString(), Green.ToString(), Blue.ToString(), White.ToString() });
+		InOutAttributes.Add(FAnalyticsEventAttribute(TEXT("ColorSpaceOverride"), ColorSpaceStr));
+	}
+
+	if (StreamEncodingOverride != UE::Color::EEncoding::None)
+	{
+		InOutAttributes.Add(FAnalyticsEventAttribute(TEXT("Encoding"), UEnum::GetValueAsString((ETextureSourceEncoding)StreamEncodingOverride)));
+	}
+
+	InOutAttributes.Add(FAnalyticsEventAttribute(TEXT("UsesOCIO"), OCIOSettings.IsValid() && OCIOSettings->IsValid() ? TEXT("Yes") : TEXT("No")));
+}
+#endif
 
 //~ ITimedDataInput interface
 #if WITH_EDITOR

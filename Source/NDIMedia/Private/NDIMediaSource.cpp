@@ -23,12 +23,20 @@ UNDIMediaSource::UNDIMediaSource()
 	, bLogDropFrame(true)
 	, bEncodeTimecodeInTexel(false)
 {
-	bOverrideSourceEncoding = false;
-	OverrideSourceEncoding = EMediaIOCoreSourceEncoding::sRGB;
-	bOverrideSourceColorSpace = false;
-	OverrideSourceColorSpace = ETextureColorSpace::TCS_sRGB;
-	
-	AssignDefaultConfiguration();
+#if WITH_EDITORONLY_DATA
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
+	bOverrideSourceEncoding_DEPRECATED = false;
+	OverrideSourceEncoding_DEPRECATED = EMediaIOCoreSourceEncoding::sRGB;
+	bOverrideSourceColorSpace_DEPRECATED = false;
+	OverrideSourceColorSpace_DEPRECATED = ETextureColorSpace::TCS_sRGB;
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
+#endif
+
+	// Don't instantiate the source finder for the CDO.
+	if (!HasAnyFlags(RF_ClassDefaultObject))
+	{
+		AssignDefaultConfiguration();
+	}
 }
 
 bool UNDIMediaSource::GetMediaOption(const FName& Key, bool DefaultValue) const
@@ -146,7 +154,7 @@ bool UNDIMediaSource::Validate() const
 	{
 		if (!MediaConfiguration.MediaConnection.IsValid())
 		{
-			UE_LOG(LogNDIMedia, Warning, TEXT("The MediaConfiguration '%s' is invalid."), *GetName());
+			UE_LOGF(LogNDIMedia, Warning, "The MediaConfiguration '%ls' is invalid.", *GetName());
 			return false;
 		}
 	}
@@ -154,33 +162,33 @@ bool UNDIMediaSource::Validate() const
 	{
 		if (!MediaConfiguration.IsValid())
 		{
-			UE_LOG(LogNDIMedia, Warning, TEXT("The MediaConfiguration '%s' is invalid."), *GetName());
+			UE_LOGF(LogNDIMedia, Warning, "The MediaConfiguration '%ls' is invalid.", *GetName());
 			return false;
 		}
 	}
 
 	if (!bRenderJIT && EvaluationType == EMediaIOSampleEvaluationType::Latest)
 	{
-		UE_LOG(LogNDIMedia, Warning, TEXT("The MediaSource '%s' uses 'Latest' evaluation type which requires JIT rendering."), *GetName());
+		UE_LOGF(LogNDIMedia, Warning, "The MediaSource '%ls' uses 'Latest' evaluation type which requires JIT rendering.", *GetName());
 		return false;
 	}
 
 	if (bFramelock)
 	{
-		UE_LOG(LogNDIMedia, Warning, TEXT("The MediaSource '%s' uses 'Framelock' which has not been implemented yet. This option will be ignored."), *GetName());
+		UE_LOGF(LogNDIMedia, Warning, "The MediaSource '%ls' uses 'Framelock' which has not been implemented yet. This option will be ignored.", *GetName());
 	}
 
 	FNDIMediaModule* NdiModule = FNDIMediaModule::Get();
 	if (!NdiModule)
 	{
-		UE_LOG(LogNDIMedia, Error, TEXT("The MediaSource '%s' failed to validate because the Ndi Module is not loaded."), *GetName());
+		UE_LOGF(LogNDIMedia, Error, "The MediaSource '%ls' failed to validate because the Ndi Module is not loaded.", *GetName());
 		return false;
 	}
 
 	const TSharedPtr<FNDIDeviceProvider> DeviceProvider = NdiModule->GetDeviceProvider();
 	if (!DeviceProvider)
 	{
-		UE_LOG(LogNDIMedia, Error, TEXT("The MediaSource '%s' failed to validate because the Ndi Device Provider is not created."), *GetName());
+		UE_LOGF(LogNDIMedia, Error, "The MediaSource '%ls' failed to validate because the Ndi Device Provider is not created.", *GetName());
 		return false;
 	}
 
@@ -194,11 +202,11 @@ bool UNDIMediaSource::Validate() const
 			break;
 		}
 	}
-		
+
+	// Even if the stream is currently offline, we allow the media source to be opened in case the stream become online at a later time.
 	if (!bDeviceFound)
 	{
-		UE_LOG(LogNDIMedia, Warning, TEXT("The MediaSource '%s' use the device '%s' that doesn't exist on this machine."), *GetName(), *MediaConfiguration.MediaConnection.Device.DeviceName.ToString());
-		return false;
+		UE_LOGF(LogNDIMedia, Warning, "The MediaSource '%ls' uses the stream '%ls' that is not currently available.", *GetName(), *MediaConfiguration.MediaConnection.Device.DeviceName.ToString());
 	}
 	
 	return true;

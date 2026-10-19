@@ -24,6 +24,7 @@
 #define UE_Color_EEncoding_CanonLog		14u
 #define UE_Color_EEncoding_ProTune		15u
 #define UE_Color_EEncoding_VLog			16u
+#define UE_Color_EEncoding_HLG				17u
 
 #define ToneMapMethod_None           0u
 #define ToneMapMethod_Hable          1u
@@ -34,9 +35,10 @@ float3 ApplyColorProcessingRGB(float3 Color, float4x4 CSMtx, uint EOTF, uint Ton
 	// Go linear
 	switch(EOTF)
 	{
-	case UE_Color_EEncoding_sRGB:	Color = sRGBToLinear(Color); break;
-	case UE_Color_EEncoding_ST2084: Color = ST2084ToLinear(Color); break;
-	case UE_Color_EEncoding_SLog3:	Color = SLog3ToLinear(Color); break;
+	case UE_Color_EEncoding_sRGB:			Color = sRGBToLinear(Color); break;
+	case UE_Color_EEncoding_ST2084:			Color = ST2084ToLinear(Color); break;
+	case UE_Color_EEncoding_SLog3:			Color = SLog3ToLinear(Color); break;
+	case UE_Color_EEncoding_HLG:			Color = HLGToLinear(Color); break;
 	default: break;
 	}
 
@@ -92,4 +94,37 @@ void NDIMediaUYVYAConvertPS(
 	YUV.yz = UYVYB.zx;
 
 	OutColor = float4(ApplyColorProcessing(YUV, NDIMediaUYVYAConvertUB.ColorTransform, NDIMediaUYVYAConvertUB.CSTransform, NDIMediaUYVYAConvertUB.EOTF, NDIMediaUYVYAConvertUB.ToneMapMethod), Alpha);
+}
+
+// Conversion of P216 (Y + UV interleaved, 16-bit 4:2:2) to RGBA.
+void NDIMediaP216ConvertPS(
+	float4 InPosition : SV_POSITION,
+	float2 InUV : TEXCOORD0,
+	out float4 OutColor : SV_Target0)
+{
+	uint2 Pos = uint2(InUV * float2(NDIMediaP216ConvertUB.OutputWidth, NDIMediaP216ConvertUB.OutputHeight));
+	uint2 PosUV = uint2(Pos.x >> 1u, Pos.y);
+
+	float Y = NDIMediaP216ConvertUB.YTexture.Load(uint3(Pos, 0u)).x;
+	float2 UV = NDIMediaP216ConvertUB.UVTexture.Load(uint3(PosUV, 0u)).xy;
+
+	float3 YUV = float3(Y, UV.x, UV.y);
+	OutColor = float4(ApplyColorProcessing(YUV, NDIMediaP216ConvertUB.ColorTransform, NDIMediaP216ConvertUB.CSTransform, NDIMediaP216ConvertUB.EOTF, NDIMediaP216ConvertUB.ToneMapMethod), 1.0f);
+}
+
+// Conversion of PA16 (Y + UV interleaved + A, 16-bit 4:2:2) to RGBA.
+void NDIMediaPA16ConvertPS(
+	float4 InPosition : SV_POSITION,
+	float2 InUV : TEXCOORD0,
+	out float4 OutColor : SV_Target0)
+{
+	uint2 Pos = uint2(InUV * float2(NDIMediaPA16ConvertUB.OutputWidth, NDIMediaPA16ConvertUB.OutputHeight));
+	uint2 PosUV = uint2(Pos.x >> 1u, Pos.y);
+
+	float Y = NDIMediaPA16ConvertUB.YTexture.Load(uint3(Pos, 0u)).x;
+	float2 UV = NDIMediaPA16ConvertUB.UVTexture.Load(uint3(PosUV, 0u)).xy;
+	float Alpha = NDIMediaPA16ConvertUB.AlphaTexture.Load(uint3(Pos, 0u)).x;
+
+	float3 YUV = float3(Y, UV.x, UV.y);
+	OutColor = float4(ApplyColorProcessing(YUV, NDIMediaPA16ConvertUB.ColorTransform, NDIMediaPA16ConvertUB.CSTransform, NDIMediaPA16ConvertUB.EOTF, NDIMediaPA16ConvertUB.ToneMapMethod), Alpha);
 }

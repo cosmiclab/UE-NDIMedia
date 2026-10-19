@@ -28,7 +28,7 @@ FNDIMediaRuntimeLibrary::FNDIMediaRuntimeLibrary(const FString& InLibraryPath)
 
 	if (LibraryPath.IsEmpty())
 	{
-		UE_LOG(LogNDIMedia, Error, TEXT("Unable to load NDI runtime library: Specified Path is empty."));
+		UE_LOGF(LogNDIMedia, Error, "Unable to load NDI runtime library: Specified Path is empty.");
 		return;
 	}
 
@@ -48,27 +48,27 @@ FNDIMediaRuntimeLibrary::FNDIMediaRuntimeLibrary(const FString& InLibraryPath)
 				// Not required, but "correct" (see the SDK documentation)
 				if (Lib->initialize())
 				{
-					UE_LOG(LogNDIMedia, Log, TEXT("NDI runtime library loaded and initialized: \"%s\"."), *LibraryPath);
+					UE_LOGF(LogNDIMedia, Log, "NDI runtime library loaded and initialized: \"%ls\".", *LibraryPath);
 				}
 				else
 				{
 					Lib = nullptr;
-					UE_LOG(LogNDIMedia, Error, TEXT("Unable to initialize NDI library from \"%s\"."), *LibraryPath);
+					UE_LOGF(LogNDIMedia, Error, "Unable to initialize NDI library from \"%ls\".", *LibraryPath);
 				}
 			}
 			else
 			{
-				UE_LOG(LogNDIMedia, Error, TEXT("Unable to load NDI runtime library interface via \"NDIlib_v5_load\" from \"%s\"."), *LibraryPath);
+				UE_LOGF(LogNDIMedia, Error, "Unable to load NDI runtime library interface via \"NDIlib_v5_load\" from \"%ls\".", *LibraryPath);
 			}
 		}
 		else
 		{
-			UE_LOG(LogNDIMedia, Error, TEXT("Unable to load NDI runtime library entry point: \"NDIlib_v5_load\" from \"%s\"."), *LibraryPath);
+			UE_LOGF(LogNDIMedia, Error, "Unable to load NDI runtime library entry point: \"NDIlib_v5_load\" from \"%ls\".", *LibraryPath);
 		}
 	}
 	else
 	{
-		UE_LOG(LogNDIMedia, Error, TEXT("Unable to load NDI runtime library: \"%s\"."), *LibraryPath);
+		UE_LOGF(LogNDIMedia, Error, "Unable to load NDI runtime library: \"%ls\".", *LibraryPath);
 	}
 
 	if (Lib == nullptr && LibHandle != nullptr)
@@ -295,7 +295,7 @@ bool FNDIMediaModule::LoadModuleDependencies()
 	if (!bIsLoaded && !Settings->bUseBundledLibrary)
 	{
 		LibraryPath = GetRuntimeLibraryFullPath();
-		UE_LOG(LogNDIMedia, Warning, TEXT("Falling back to bundled NDI runtime library: \"%s\"."), *LibraryPath);
+		UE_LOGF(LogNDIMedia, Warning, "Falling back to bundled NDI runtime library: \"%ls\".", *LibraryPath);
 		NDILib = MakeShared<FNDIMediaRuntimeLibrary>(LibraryPath);
 		bIsLoaded = NDILib.IsValid() && NDILib->IsLoaded();
 	}
@@ -340,17 +340,17 @@ void FNDIMediaModule::OnRuntimeLibrarySettingsChanged(const UNDIMediaSettings* I
 		}
 		else if (NDILib && NDILib->IsLoaded())
 		{
-			UE_LOG(LogNDIMedia, Log, TEXT("Keeping current NDI runtime library: \"%s\"."), *NDILib->LibraryPath);
+			UE_LOGF(LogNDIMedia, Log, "Keeping current NDI runtime library: \"%ls\".", *NDILib->LibraryPath);
 		}
 		else
 		{
-			UE_LOG(LogNDIMedia, Error, TEXT("No NDI runtime library could be loaded."));
+			UE_LOGF(LogNDIMedia, Error, "No NDI runtime library could be loaded.");
 			UpdateLibraryFullPath(GetMutableDefault<UNDIMediaSettings>(), NDILib);
 		}
 	}
 	else
 	{
-		UE_LOG(LogNDIMedia, Log, TEXT("NDI runtime library already loaded: \"%s\"."), *NewLibraryPath);
+		UE_LOGF(LogNDIMedia, Log, "NDI runtime library already loaded: \"%ls\".", *NewLibraryPath);
 	}
 }
 #endif

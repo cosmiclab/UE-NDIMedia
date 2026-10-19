@@ -5,6 +5,7 @@
 #include "Engine/Engine.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "MediaIOCoreSubsystem.h"
+#include "MediaTexture.h"
 #include "NDIMediaAPI.h"
 #include "NDIMediaLog.h"
 #include "NDIMediaModule.h"
@@ -48,11 +49,11 @@ public:
 				// Likely cause of failure is having source name collision.
 				if (NDILibHandle->Senders.Contains(FullSenderName))
 				{
-					UE_LOG(LogNDIMedia, Error, TEXT("Failed to create NDI capture \"%s\". A source of the same name has already been created."), *FullSenderName);
+					UE_LOGF(LogNDIMedia, Error, "Failed to create NDI capture \"%ls\". A source of the same name has already been created.", *FullSenderName);
 				}
 				else
 				{
-					UE_LOG(LogNDIMedia, Error, TEXT("Failed to create NDI capture \"%s\"."), *FullSenderName);	
+					UE_LOGF(LogNDIMedia, Error, "Failed to create NDI capture \"%ls\".", *FullSenderName);	
 				}
 			}
 		}
@@ -399,7 +400,7 @@ bool UNDIMediaCapture::PostInitializeCaptureViewport(TSharedPtr<FSceneViewport>&
 	const bool bSuccess = StartNewCapture();
 	if (bSuccess)
 	{
-		UE_LOG(LogNDIMedia, Log, TEXT("Media Capture Started: Scene Viewport (%d x %d)."), 
+		UE_LOGF(LogNDIMedia, Log, "Media Capture Started: Scene Viewport (%d x %d).", 
 			InSceneViewport->GetSize().X, InSceneViewport->GetSize().Y);
 	}
 	return bSuccess;
@@ -410,7 +411,7 @@ bool UNDIMediaCapture::PostInitializeCaptureRenderTarget(UTextureRenderTarget2D*
 	const bool bSuccess = StartNewCapture();
 	if (bSuccess)
 	{
-		UE_LOG(LogNDIMedia, Log, TEXT("Media Capture Started: Render Target (%d x %d)."), 
+		UE_LOGF(LogNDIMedia, Log, "Media Capture Started: Render Target (%d x %d).", 
 			InRenderTarget->SizeX, InRenderTarget->SizeY);
 	}
 	return bSuccess;
@@ -421,8 +422,19 @@ bool UNDIMediaCapture::PostInitializeCaptureRHIResource(const FRHICaptureResourc
 	const bool bSuccess = StartNewCapture();
 	if (bSuccess)
 	{
-		UE_LOG(LogNDIMedia, Log, TEXT("Media Capture Started: Render Target (%d x %d)."), 
+		UE_LOGF(LogNDIMedia, Log, "Media Capture Started: Render Target (%d x %d).", 
 			InResourceDescription.ResourceSize.X, InResourceDescription.ResourceSize.Y);
+	}
+	return bSuccess;
+}
+
+bool UNDIMediaCapture::PostInitializeCaptureMediaTexture(UMediaTexture* InMediaTexture)
+{
+	const bool bSuccess = StartNewCapture();
+	if (bSuccess)
+	{
+		UE_LOGF(LogNDIMedia, Log, "Media Capture Started: Media Texture (%d x %d).", 
+			InMediaTexture->GetWidth(), InMediaTexture->GetHeight());
 	}
 	return bSuccess;
 }
@@ -462,6 +474,20 @@ bool UNDIMediaCapture::SupportsAnyThreadCapture() const
 #endif // PLATFORM_MAC
 }
 
+
+#if WITH_EDITOR
+bool UNDIMediaCapture::ShouldAutoRecordCaptureStartedEvent() const
+{
+	// NDI starts its captures asynchronously, so RecordCaptureStartedEvent will be called manually
+	return false;
+}
+
+FString UNDIMediaCapture::GetAnalyticsEventPrefix() const
+{
+	return TEXT("MediaFramework.NDI");
+}
+#endif
+
 bool UNDIMediaCapture::StartNewCapture()
 {
 	TRACE_BOOKMARK(TEXT("NDIMediaCapture::StartNewCapture"));
@@ -480,12 +506,17 @@ bool UNDIMediaCapture::StartNewCapture()
 			{
 				CaptureInstance->UpdateAudioOutput(AudioDeviceHandle, *NDIMediaOutput);
 				SetState(EMediaCaptureState::Capturing);
+
+#if WITH_EDITOR
+				RecordCaptureStartedEvent();
+#endif
+
 				return true;
 			}
 		}
 		else
 		{
-			UE_LOG(LogNDIMedia, Error, TEXT("Internal Error: Media Capture's associated Media Output is not of type \"UNDIMediaOutput\"."));
+			UE_LOGF(LogNDIMedia, Error, "Internal Error: Media Capture's associated Media Output is not of type \"UNDIMediaOutput\".");
 		}
 	}
 

@@ -25,7 +25,7 @@ TSoftClassPtr<UObject> UAssetDefinition_NDIMediaOutput::GetAssetClass() const
 
 TConstArrayView<FAssetCategoryPath> UAssetDefinition_NDIMediaOutput::GetAssetCategories() const
 {
-	static const TArray<FAssetCategoryPath> Categories = {EAssetCategoryPaths::Media};
+	static const TArray<FAssetCategoryPath> Categories = { FAssetCategoryPath(EAssetCategoryPaths::Media, LOCTEXT("AssetDefinition_NDIMediaOutputSubMenu", "Media Sources + Outputs"), ECategoryMenuType::Section) };
 	return Categories;
 }
 

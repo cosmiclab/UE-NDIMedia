@@ -81,12 +81,14 @@ public class NDIMedia : ModuleRules
 				"MediaUtils",
 				"NDIMediaRendering",
 				"NDISDK",
+				"OpenColorIO",
 				"Projects",
 				"RenderCore",
 				"RHI",
 				"Slate",
 				"SlateCore",
 				"TimeManagement",
+				"XmlParser",
 			});
 
         PublicAdditionalLibraries.AddRange(

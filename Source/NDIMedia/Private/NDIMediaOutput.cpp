@@ -100,7 +100,7 @@ UMediaCapture* UNDIMediaOutput::CreateMediaCaptureImpl()
 	UMediaCapture* Result = NewObject<UNDIMediaCapture>();
 	if (Result)
 	{
-		UE_LOG(LogNDIMedia, Log, TEXT("Created NDI Media Capture"));
+		UE_LOGF(LogNDIMedia, Log, "Created NDI Media Capture");
 		Result->SetMediaOutput(this);
 	}
 	return Result;

@@ -2,13 +2,11 @@
 
 #include "NDIMediaEditorModule.h"
 
-#include "AssetToolsModule.h"
 #include "Brushes/SlateImageBrush.h"
 #include "Interfaces/IPluginManager.h"
 #include "Misc/Paths.h"
 #include "Modules/ModuleInterface.h"
 #include "Modules/ModuleManager.h"
-#include "NDIMediaSourceActions.h"
 #include "PropertyEditorDelegates.h"
 #include "PropertyEditorModule.h"
 #include "Styling/SlateStyle.h"
@@ -25,7 +23,6 @@ class FNDIMediaEditorModule : public IModuleInterface
 	virtual void StartupModule() override
 	{
 		RegisterStyle();
-		RegisterAssetTools();
 	}
 
 	virtual void ShutdownModule() override
@@ -33,33 +30,10 @@ class FNDIMediaEditorModule : public IModuleInterface
 		if (!UObjectInitialized() && !IsEngineExitRequested())
 		{
 			UnregisterStyle();
-			UnregisterAssetTools();
 		}
 	}
 
 private:
-	void RegisterAssetTools()
-	{
-		IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
-
-		TSharedRef<IAssetTypeActions> Action = MakeShared<FNDIMediaSourceActions>();
-		AssetTools.RegisterAssetTypeActions(Action);
-		RegisteredAssetTypeActions.Add(Action);
-	}
-
-	void UnregisterAssetTools()
-	{
-		if (FAssetToolsModule* AssetToolsModule = FModuleManager::GetModulePtr<FAssetToolsModule>("AssetTools"))
-		{
-			IAssetTools& AssetTools = AssetToolsModule->Get();
-			for (const TSharedRef<IAssetTypeActions>& Action : RegisteredAssetTypeActions)
-			{
-				AssetTools.UnregisterAssetTypeActions(Action);
-			}
-			RegisteredAssetTypeActions.Reset();
-		}
-	}
-
 	/** Register slate style */
 	void RegisterStyle()
 	{
@@ -84,10 +58,6 @@ private:
 	{
 		FSlateStyleRegistry::UnRegisterSlateStyle(*StyleInstance.Get());
 	}
-	
-private:
-	/** The collection of registered asset type actions. */
-	TArray<TSharedRef<IAssetTypeActions>> RegisteredAssetTypeActions;
 };
 
 #undef LOCTEXT_NAMESPACE
